@@ -1,6 +1,7 @@
-# bot_telegram_webcam.py
+# bot_telegram_cam_multi.py
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -14,59 +15,82 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-INITIAL_MESSAGE = """👋 Ciao! Sono il bot webcam del Raspberry.
+INITIAL_MESSAGE = """👋 Ciao! Sono il bot camere del Raspberry.
 
 Cosa posso fare:
-• 📸 Scatta foto: cattura una foto dalla webcam e la invia in chat
-• 🛑 Stop: arresta il bot
+• 📸 Webcam locale
+• 🏠 IP Cam 1
+• 🚪 IP Cam 2
+• 🛑 Stop
 """
 
 PHOTO_DIR = Path("./img")
 PHOTO_DIR.mkdir(parents=True, exist_ok=True)
 
+TOKEN = Path("token.txt").read_text(encoding="utf-8").strip()
 
-def read_token(path: str = "token.txt") -> str:
-    token = Path(path).read_text(encoding="utf-8").strip()
-    if not token:
-        raise ValueError("Token vuoto: controlla il contenuto di token.txt")
-    return token
-
-
-TOKEN = read_token("token.txt")
+RTSP_CAM_1 = Path("ip_cam_01.txt").read_text(encoding="utf-8").strip()
+RTSP_CAM_2 = Path("ip_cam_02.txt").read_text(encoding="utf-8").strip()
 
 
 def build_main_menu() -> InlineKeyboardMarkup:
     kb = [
-        [InlineKeyboardButton("📸 Scatta foto", callback_data="take_photo")],
+        [InlineKeyboardButton("📸 Webcam locale", callback_data="shot_local")],
+        [InlineKeyboardButton("🏠 Scatta IP Cam 1", callback_data="shot_cam1")],
+        [InlineKeyboardButton("🚪 Scatta IP Cam 2", callback_data="shot_cam2")],
         [InlineKeyboardButton("🛑 Stop", callback_data="stop")]
     ]
     return InlineKeyboardMarkup(kb)
 
 
 def build_back_menu() -> InlineKeyboardMarkup:
-    kb = [[InlineKeyboardButton("« Menu", callback_data="menu")]]
-    return InlineKeyboardMarkup(kb)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("« Menu", callback_data="menu")]
+    ])
 
 
-def capture_photo() -> Path:
-    filename = datetime.now().strftime("foto_%Y%m%d_%H%M%S.jpg")
+def capture_from_source(source, prefix: str, use_ffmpeg: bool = False) -> Path:
+    filename = datetime.now().strftime(f"{prefix}_%Y%m%d_%H%M%S.jpg")
     filepath = PHOTO_DIR / filename
 
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        raise RuntimeError("Impossibile aprire la webcam")
+    if use_ffmpeg:
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp"
+        cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+    else:
+        cap = cv2.VideoCapture(source)
 
-    ret, frame = cap.read()
+    if not cap.isOpened():
+        raise RuntimeError(f"Impossibile aprire la sorgente: {prefix}")
+
+    frame = None
+    ret = False
+
+    for _ in range(8):
+        ret, frame = cap.read()
+        if ret and frame is not None:
+            time.sleep(0.1)
+
     cap.release()
 
-    if not ret:
-        raise RuntimeError("Impossibile catturare l'immagine dalla webcam")
+    if not ret or frame is None:
+        raise RuntimeError(f"Impossibile catturare l'immagine da: {prefix}")
 
     ok = cv2.imwrite(str(filepath), frame)
     if not ok:
-        raise RuntimeError("Impossibile salvare l'immagine su disco")
+        raise RuntimeError(f"Impossibile salvare l'immagine di: {prefix}")
 
     return filepath
+
+
+async def send_snapshot(chat_id: int, bot, source, prefix: str, label: str, use_ffmpeg: bool = False):
+    photo_path = capture_from_source(source, prefix, use_ffmpeg=use_ffmpeg)
+    with open(photo_path, "rb") as photo_file:
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=photo_file,
+            caption=f"{label}\nFile: {photo_path.name}"
+        )
+    return photo_path
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -76,69 +100,90 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def photo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("📸 Scatto foto in corso...")
-    try:
-        photo_path = capture_photo()
-        with open(photo_path, "rb") as photo_file:
-            await update.message.reply_photo(
-                photo=photo_file,
-                caption=f"Foto catturata: {photo_path.name}"
-            )
-        await msg.delete()
-    except Exception as e:
-        await msg.edit_text(f"Errore durante lo scatto: {e}")
+async def foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Scegli quale camera usare:",
+        reply_markup=build_main_menu()
+    )
 
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    if q.data == "take_photo":
-        await q.edit_message_text("📸 Scatto foto in corso...")
-        try:
-            photo_path = capture_photo()
-            with open(photo_path, "rb") as photo_file:
-                await context.bot.send_photo(
-                    chat_id=q.message.chat_id,
-                    photo=photo_file,
-                    caption=f"Foto catturata: {photo_path.name}"
-                )
-
-            await q.edit_message_text(
-                "Foto inviata correttamente.",
-                reply_markup=build_back_menu()
+    try:
+        if q.data == "shot_local":
+            await q.edit_message_text("📸 Scatto da webcam locale in corso...")
+            await send_snapshot(
+                chat_id=q.message.chat_id,
+                bot=context.bot,
+                source=0,
+                prefix="webcam",
+                label="📸 Snapshot webcam locale"
             )
-        except Exception as e:
             await q.edit_message_text(
-                f"Errore durante lo scatto: {e}",
+                "Snapshot webcam inviato correttamente.",
                 reply_markup=build_back_menu()
             )
 
-    elif q.data == "menu":
-        await q.edit_message_text(
-            INITIAL_MESSAGE,
-            reply_markup=build_main_menu()
-        )
+        elif q.data == "shot_cam1":
+            await q.edit_message_text("🏠 Snapshot da IP Cam 1 in corso...")
+            await send_snapshot(
+                chat_id=q.message.chat_id,
+                bot=context.bot,
+                source=RTSP_CAM_1,
+                prefix="cam1",
+                label="🏠 Snapshot IP Cam 1",
+                use_ffmpeg=True
+            )
+            await q.edit_message_text(
+                "Snapshot IP Cam 1 inviato correttamente.",
+                reply_markup=build_back_menu()
+            )
 
-    elif q.data == "stop":
-        await q.edit_message_text("Arresto in corso...")
-        await context.application.stop()
+        elif q.data == "shot_cam2":
+            await q.edit_message_text("🚪 Snapshot da IP Cam 2 in corso...")
+            await send_snapshot(
+                chat_id=q.message.chat_id,
+                bot=context.bot,
+                source=RTSP_CAM_2,
+                prefix="cam2",
+                label="🚪 Snapshot IP Cam 2",
+                use_ffmpeg=True
+            )
+            await q.edit_message_text(
+                "Snapshot IP Cam 2 inviato correttamente.",
+                reply_markup=build_back_menu()
+            )
 
-    else:
+        elif q.data == "menu":
+            await q.edit_message_text(
+                INITIAL_MESSAGE,
+                reply_markup=build_main_menu()
+            )
+
+        elif q.data == "stop":
+            await q.edit_message_text("Arresto in corso...")
+            await context.application.stop()
+
+        else:
+            await q.edit_message_text(
+                "Azione non riconosciuta.",
+                reply_markup=build_back_menu()
+            )
+
+    except Exception as e:
         await q.edit_message_text(
-            "Azione non riconosciuta.",
+            f"Errore: {e}",
             reply_markup=build_back_menu()
         )
 
 
 def main():
     app = Application.builder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("foto", photo_command))
+    app.add_handler(CommandHandler("foto", foto))
     app.add_handler(CallbackQueryHandler(on_button))
-
     app.run_polling()
 
 
