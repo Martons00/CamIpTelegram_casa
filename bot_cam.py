@@ -4,6 +4,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
+from PIL import Image, ImageOps, ImageDraw
 
 import cv2
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -37,6 +38,52 @@ def get_last_images(limit: int = 10):
     files = sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
     return files[:limit]
 
+def create_4_cam_collage(
+    img1: Path,
+    img2: Path,
+    img3: Path,
+    img4: Path,
+    output_dir: Path,
+    labels: list[str] | None = None,
+    cell_size=(640, 360),
+    padding=12,
+    bg_color=(25, 25, 25)
+) -> Path:
+    labels = labels or ["Cam 1", "Cam 2", "Cam 3", "Cam 4"]
+
+    images = [img1, img2, img3, img4]
+    processed = []
+
+    for img_path in images:
+        img = Image.open(img_path).convert("RGB")
+        fitted = ImageOps.fit(img, cell_size, method=Image.Resampling.LANCZOS)
+        processed.append(fitted)
+
+    width = cell_size[0] * 2 + padding * 3
+    height = cell_size[1] * 2 + padding * 3
+
+    collage = Image.new("RGB", (width, height), bg_color)
+
+    positions = [
+        (padding, padding),
+        (cell_size[0] + padding * 2, padding),
+        (padding, cell_size[1] + padding * 2),
+        (cell_size[0] + padding * 2, cell_size[1] + padding * 2),
+    ]
+
+    for img, pos in zip(processed, positions):
+        collage.paste(img, pos)
+
+    draw = ImageDraw.Draw(collage)
+    for label, pos in zip(labels, positions):
+        x, y = pos
+        draw.rectangle((x, y, x + 180, y + 30), fill=(0, 0, 0))
+        draw.text((x + 8, y + 6), label, fill=(255, 255, 255))
+
+    output_path = output_dir / datetime.now().strftime("collage_%Y%m%d_%H%M%S.jpg")
+    collage.save(output_path, quality=95)
+    return output_path
+
 
 def build_history_menu(files) -> InlineKeyboardMarkup:
     rows = [
@@ -53,7 +100,7 @@ def build_main_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📸 Webcam locale N 2", callback_data="shot_local_01")],
         [InlineKeyboardButton("🏠 Scatta IP Cam 1", callback_data="shot_cam1")],
         [InlineKeyboardButton("🚪 Scatta IP Cam 2", callback_data="shot_cam2")],
-        [InlineKeyboardButton("🛖 Tutte e tre", callback_data="shot_total")],
+        [InlineKeyboardButton("🛖 Tutte", callback_data="shot_total")],
         [InlineKeyboardButton("📚 History", callback_data="history")],
         [InlineKeyboardButton("🛑 Stop", callback_data="stop")]
     ]
@@ -106,14 +153,15 @@ async def send_main_menu(chat_id: int, bot):
     )
 
 
-async def send_snapshot(chat_id: int, bot, source, prefix: str, label: str, use_ffmpeg: bool = False):
+async def send_snapshot(chat_id: int, bot, source, prefix: str, label: str, use_ffmpeg: bool = False, send: bool = True):
     photo_path = capture_from_source(source, prefix, use_ffmpeg=use_ffmpeg)
-    with open(photo_path, "rb") as photo_file:
-        await bot.send_photo(
-            chat_id=chat_id,
-            photo=photo_file,
-            caption=f"{label}\nFile: {photo_path.name}"
-        )
+    if send: 
+        with open(photo_path, "rb") as photo_file:
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_file,
+                caption=f"{label}\nFile: {photo_path.name}"
+            )
     return photo_path
 
 
@@ -208,39 +256,66 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif q.data == "shot_total":
             await q.edit_message_text("📸 Invio snapshot da tutte le camere in corso...")
 
-            await send_snapshot(
+            photo_path_01 = await send_snapshot(
                 chat_id=q.message.chat_id,
                 bot=context.bot,
                 source=0,
                 prefix="webcam_01",
-                label="📸 Snapshot webcam locale N 1"
+                label="📸 Snapshot webcam locale N 1",
+                send=False
             )
 
-            await send_snapshot(
+            photo_path_02 = await send_snapshot(
                 chat_id=q.message.chat_id,
                 bot=context.bot,
                 source=2,
                 prefix="webcam_02",
-                label="📸 Snapshot webcam locale N 2"
+                label="📸 Snapshot webcam locale N 2",
+                send= False
             )
 
-            await send_snapshot(
+            photo_path_03 = await send_snapshot(
                 chat_id=q.message.chat_id,
                 bot=context.bot,
                 source=RTSP_CAM_1,
                 prefix="cam1",
                 label="🏠 Snapshot IP Cam 1",
-                use_ffmpeg=True
+                use_ffmpeg=True,
+                send=False
             )
 
-            await send_snapshot(
+            photo_path_04 = await send_snapshot(
                 chat_id=q.message.chat_id,
                 bot=context.bot,
                 source=RTSP_CAM_2,
                 prefix="cam2",
                 label="🚪 Snapshot IP Cam 2",
-                use_ffmpeg=True
+                use_ffmpeg=True,
+                send=False
             )
+
+            collage_path = create_4_cam_collage(
+                photo_path_01,
+                photo_path_02,
+                photo_path_03,
+                photo_path_04,
+                PHOTO_DIR,
+                labels=[
+                    "Webcam 1",
+                    "Webcam 2",
+                    "IP Cam 1",
+                    "IP Cam 2"
+                ]
+            )
+
+            with open(collage_path, "rb") as photo_file:
+                await context.bot.send_photo(
+                    chat_id=q.message.chat_id,
+                    photo=photo_file,
+                    caption=f"🧩 Collage 4 camere\nFile: {collage_path.name}"
+                )
+
+
             await q.edit_message_text(
                 "Snapshots inviati correttamente.",
                 reply_markup=build_back_menu()
