@@ -32,12 +32,28 @@ TOKEN = Path("token.txt").read_text(encoding="utf-8").strip()
 RTSP_CAM_1 = Path("ip_cam_01.txt").read_text(encoding="utf-8").strip()
 RTSP_CAM_2 = Path("ip_cam_02.txt").read_text(encoding="utf-8").strip()
 
+def get_last_images(limit: int = 10):
+    files = [p for p in PHOTO_DIR.iterdir() if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png"}]
+    files = sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[:limit]
+
+
+def build_history_menu(files) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(f"{i+1}. {file.name}", callback_data=f"hist_{file.name}")]
+        for i, file in enumerate(files)
+    ]
+    rows.append([InlineKeyboardButton("« Menu", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
+
 
 def build_main_menu() -> InlineKeyboardMarkup:
     kb = [
         [InlineKeyboardButton("📸 Webcam locale", callback_data="shot_local")],
         [InlineKeyboardButton("🏠 Scatta IP Cam 1", callback_data="shot_cam1")],
         [InlineKeyboardButton("🚪 Scatta IP Cam 2", callback_data="shot_cam2")],
+        [InlineKeyboardButton("🛖 Tutte e tre", callback_data="shot_total")],
+        [InlineKeyboardButton("📚 History", callback_data="history")],
         [InlineKeyboardButton("🛑 Stop", callback_data="stop")]
     ]
     return InlineKeyboardMarkup(kb)
@@ -80,6 +96,13 @@ def capture_from_source(source, prefix: str, use_ffmpeg: bool = False) -> Path:
         raise RuntimeError(f"Impossibile salvare l'immagine di: {prefix}")
 
     return filepath
+
+async def send_main_menu(chat_id: int, bot):
+    await bot.send_message(
+        chat_id=chat_id,
+        text=INITIAL_MESSAGE,
+        reply_markup=build_main_menu()
+    )
 
 
 async def send_snapshot(chat_id: int, bot, source, prefix: str, label: str, use_ffmpeg: bool = False):
@@ -126,6 +149,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=build_back_menu()
             )
 
+            await send_main_menu(q.message.chat_id, context.bot)
+
+
+
         elif q.data == "shot_cam1":
             await q.edit_message_text("🏠 Snapshot da IP Cam 1 in corso...")
             await send_snapshot(
@@ -141,6 +168,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=build_back_menu()
             )
 
+            await send_main_menu(q.message.chat_id, context.bot)
+
         elif q.data == "shot_cam2":
             await q.edit_message_text("🚪 Snapshot da IP Cam 2 in corso...")
             await send_snapshot(
@@ -155,6 +184,81 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Snapshot IP Cam 2 inviato correttamente.",
                 reply_markup=build_back_menu()
             )
+
+            await send_main_menu(q.message.chat_id, context.bot)
+
+
+        elif q.data == "shot_total":
+            await q.edit_message_text("📸 Invio snapshot da tutte le camere in corso...")
+
+            await send_snapshot(
+                chat_id=q.message.chat_id,
+                bot=context.bot,
+                source=0,
+                prefix="webcam",
+                label="📸 Snapshot webcam locale"
+            )
+
+            await send_snapshot(
+                chat_id=q.message.chat_id,
+                bot=context.bot,
+                source=RTSP_CAM_1,
+                prefix="cam1",
+                label="🏠 Snapshot IP Cam 1",
+                use_ffmpeg=True
+            )
+
+            await send_snapshot(
+                chat_id=q.message.chat_id,
+                bot=context.bot,
+                source=RTSP_CAM_2,
+                prefix="cam2",
+                label="🚪 Snapshot IP Cam 2",
+                use_ffmpeg=True
+            )
+            await q.edit_message_text(
+                "Snapshots inviati correttamente.",
+                reply_markup=build_back_menu()
+            )
+
+            await send_main_menu(q.message.chat_id, context.bot)
+        elif q.data == "history":
+            files = get_last_images(10)
+
+            if not files:
+                await context.bot.send_message(
+                    chat_id=q.message.chat_id,
+                    text="Non ci sono ancora immagini salvate."
+                )
+                await send_main_menu(q.message.chat_id, context.bot)
+                return
+
+            await context.bot.send_message(
+                chat_id=q.message.chat_id,
+                text="Scegli una delle ultime 10 immagini:",
+                reply_markup=build_history_menu(files)
+            )
+
+        elif q.data.startswith("hist_"):
+            filename = q.data[len("hist_"):]
+            photo_path = PHOTO_DIR / filename
+
+            if not photo_path.exists() or not photo_path.is_file():
+                await context.bot.send_message(
+                    chat_id=q.message.chat_id,
+                    text="Immagine non trovata."
+                )
+                await send_main_menu(q.message.chat_id, context.bot)
+                return
+
+            with open(photo_path, "rb") as photo_file:
+                await context.bot.send_photo(
+                    chat_id=q.message.chat_id,
+                    photo=photo_file,
+                    caption=f"🖼 Immagine storica: {photo_path.name}"
+                )
+
+            await send_main_menu(q.message.chat_id, context.bot)
 
         elif q.data == "menu":
             await q.edit_message_text(
