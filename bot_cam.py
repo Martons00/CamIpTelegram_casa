@@ -49,7 +49,8 @@ def build_history_menu(files) -> InlineKeyboardMarkup:
 
 def build_main_menu() -> InlineKeyboardMarkup:
     kb = [
-        [InlineKeyboardButton("📸 Webcam locale", callback_data="shot_local")],
+        [InlineKeyboardButton("📸 Webcam locale N 1", callback_data="shot_local")],
+        [InlineKeyboardButton("📸 Webcam locale N 2", callback_data="shot_local_01")],
         [InlineKeyboardButton("🏠 Scatta IP Cam 1", callback_data="shot_cam1")],
         [InlineKeyboardButton("🚪 Scatta IP Cam 2", callback_data="shot_cam2")],
         [InlineKeyboardButton("🛖 Tutte e tre", callback_data="shot_total")],
@@ -141,7 +142,23 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=q.message.chat_id,
                 bot=context.bot,
                 source=0,
-                prefix="webcam",
+                prefix="webcam_01",
+                label="📸 Snapshot webcam locale N 1"
+            )
+            await q.edit_message_text(
+                "Snapshot webcam inviato correttamente.",
+                reply_markup=build_back_menu()
+            )
+
+            await send_main_menu(q.message.chat_id, context.bot)
+
+        elif q.data == "shot_local_01":
+            await q.edit_message_text("📸 Scatto da webcam locale in corso...")
+            await send_snapshot(
+                chat_id=q.message.chat_id,
+                bot=context.bot,
+                source=1,
+                prefix="webcam_02",
                 label="📸 Snapshot webcam locale"
             )
             await q.edit_message_text(
@@ -195,8 +212,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=q.message.chat_id,
                 bot=context.bot,
                 source=0,
-                prefix="webcam",
-                label="📸 Snapshot webcam locale"
+                prefix="webcam_01",
+                label="📸 Snapshot webcam locale N 1"
+            )
+
+            await send_snapshot(
+                chat_id=q.message.chat_id,
+                bot=context.bot,
+                source=1,
+                prefix="webcam_02",
+                label="📸 Snapshot webcam locale N 2"
             )
 
             await send_snapshot(
