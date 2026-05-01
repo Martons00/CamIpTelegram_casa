@@ -157,7 +157,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_snapshot(
                 chat_id=q.message.chat_id,
                 bot=context.bot,
-                source=1,
+                source=2,
                 prefix="webcam_02",
                 label="📸 Snapshot webcam locale"
             )
@@ -219,7 +219,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_snapshot(
                 chat_id=q.message.chat_id,
                 bot=context.bot,
-                source=1,
+                source=2,
                 prefix="webcam_02",
                 label="📸 Snapshot webcam locale N 2"
             )
